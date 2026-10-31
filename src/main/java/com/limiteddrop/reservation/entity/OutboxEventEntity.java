@@ -8,7 +8,6 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import java.time.Instant;
@@ -33,7 +32,6 @@ public class OutboxEventEntity {
     @Column(name = "event_type", nullable = false, length = 100)
     private String eventType;
 
-    @Lob
     @Column(nullable = false, columnDefinition = "JSON")
     private String payload;
 
