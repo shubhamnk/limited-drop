@@ -15,7 +15,7 @@ This project was built with **Cursor Cloud Agents** (Composer) against the techn
 **How context was steered (not “generate an app”):**
 
 1. Paste / point at the **TDD** as the source of truth (inventory SQL, hold lifecycle, outbox, HTTP semantics).
-2. Call out **non-negotiables**: MySQL owns inventory; Redis fail-open; no Rabbit publish inside business TX; customer id from auth header, not body.
+2. Call out **non-negotiables**: MySQL owns inventory (not Redis DECR counters — Redis down ⇒ unsafe); Redis fail-open for reads only; no Rabbit publish inside business TX; customer id from auth header, not body.
 3. Separate docs from code: when ports conflicted, ask for a **file only** without committing; when README was wrong, move TDD into `DESIGN.md` and rewrite run/API docs.
 4. Use **runtime evidence** (MySQL error 3144, RabbitMQ connect log) to drive a targeted entity fix rather than a redesign.
 
@@ -23,7 +23,21 @@ This project was built with **Cursor Cloud Agents** (Composer) against the techn
 
 ## Accepted vs rejected suggestions (≥ 3)
 
-### 1. Spring Boot version / project bootstrap
+### 1. Inventory counters in Redis vs MySQL (core architecture)
+
+| | |
+|---|---|
+| **Initial idea (considered / suggested)** | Keep drop inventory as **Redis counters** (`available`, `reserved`, `sold`). Each create-hold would `DECR` available / `INCR` reserved; confirm/cancel/expire would adjust the same keys. Fast under load, easy to sketch. |
+| **Decision** | **Rejected** Redis as the inventory authority. **Accepted** MySQL as source of truth with atomic conditional `UPDATE`s on `drops`, plus Redis only as **cache-aside** for drop metadata reads. |
+| **Technical reason** | If Redis goes down, restarts, or loses data, counters and the durable hold rows diverge — you can oversell, undersell, or refuse valid holds. Reservation correctness cannot depend on cache availability. MySQL transactions + `available_units >= :qty` (and the units balance check) keep allocate / confirm / cancel / expire consistent across app instances. Redis remaining role: speed up `GET /drops` style reads; on Redis failure, fall through to MySQL and still allow holds. |
+
+```text
+Rejected path:  hold → Redis DECR available  (what if Redis is down?)
+Chosen path:    hold → MySQL UPDATE … WHERE available_units >= qty  (+ hold row + outbox in one TX)
+                Redis ← optional cache of drop metadata only
+```
+
+### 2. Spring Boot version / project bootstrap
 
 | | |
 |---|---|
@@ -31,7 +45,7 @@ This project was built with **Cursor Cloud Agents** (Composer) against the techn
 | **Decision** | **Rejected** Boot 4 for this assignment. **Accepted** a hand-written Maven project on **Spring Boot 3.3.5** (satisfies “3.2+”). |
 | **Technical reason** | The TDD specifies Spring Boot 3.2+. Boot 4 changes the baseline and would muddy review against the design. Manual `pom.xml` + Java 17 `release` keeps the stack aligned with the document. |
 
-### 2. Confirm/cancel of an already-expired hold
+### 3. Confirm/cancel of an already-expired hold
 
 | | |
 |---|---|
@@ -39,7 +53,7 @@ This project was built with **Cursor Cloud Agents** (Composer) against the techn
 | **Decision** | **Rejected** throw-inside-TX as the conflict path. **Accepted** a result object (`ConfirmResult` / `CancelResult`): commit expire+release, *then* surface `409`. |
 | **Technical reason** | Spring rolls back on unchecked exceptions leaving the callback. TDD §5.4 requires the expire+release to be **durable** before the client sees conflict. Throwing inside the TX would undo the correctness work and leave inventory reserved. |
 
-### 3. Mapping MySQL `JSON` columns in JPA
+### 4. Mapping MySQL `JSON` columns in JPA
 
 | | |
 |---|---|
@@ -47,7 +61,7 @@ This project was built with **Cursor Cloud Agents** (Composer) against the techn
 | **Decision** | **Rejected** `@Lob` after production MySQL failure. **Accepted** plain `String` + `columnDefinition = "JSON"`. |
 | **Technical reason** | Hibernate binds `@Lob` `String` as a **binary** LOB. MySQL error **3144** / SQLState **22001**: JSON columns reject binary charset. Outbox insert failed first → hold TX rolled back → API `500`. H2 unit tests never exercised MySQL JSON binding, so they stayed green. |
 
-### 4. README content (related steering)
+### 5. README content (related steering)
 
 | | |
 |---|---|
