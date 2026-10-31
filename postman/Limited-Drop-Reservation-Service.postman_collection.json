@@ -1,0 +1,199 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Limited Drop Reservation Service",
+    "description": "API collection for Limited Drop holds: list/get drops, create/confirm/cancel holds.\n\nAuth (dev): X-Customer-Id\nMutating hold APIs also need Idempotency-Key.\n\nDefault baseUrl uses host port 8081 (docker-compose host remap). Change to http://localhost:8080 if needed.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8081" },
+    { "key": "customerId", "value": "cust-1" },
+    { "key": "dropId", "value": "1" },
+    { "key": "holdId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Actuator health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/actuator/health"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Drops",
+      "item": [
+        {
+          "name": "List drops",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/drops",
+            "description": "Public. Returns all drops with inventory counters."
+          }
+        },
+        {
+          "name": "Get drop by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/drops/{{dropId}}",
+            "description": "Public. 404 if drop does not exist."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Holds",
+      "item": [
+        {
+          "name": "Create hold",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.request.headers.upsert({",
+                  "  key: 'Idempotency-Key',",
+                  "  value: 'create-' + Date.now()",
+                  "});"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.id) {",
+                  "    pm.collectionVariables.set('holdId', body.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Customer-Id", "value": "{{customerId}}" },
+              { "key": "Idempotency-Key", "value": "create-hold-001", "description": "Overwritten by pre-request script with a unique value" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 1\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/drops/{{dropId}}/holds",
+            "description": "Creates ACTIVE hold. Saves holdId into collection variable on 201.\n\n400 invalid quantity / missing key\n409 insufficient inventory or idempotency payload mismatch"
+          }
+        },
+        {
+          "name": "Get hold",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Customer-Id", "value": "{{customerId}}" }
+            ],
+            "url": "{{baseUrl}}/api/v1/holds/{{holdId}}",
+            "description": "Owner only. 403 if another customer."
+          }
+        },
+        {
+          "name": "Confirm hold",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.request.headers.upsert({",
+                  "  key: 'Idempotency-Key',",
+                  "  value: 'confirm-' + Date.now()",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Customer-Id", "value": "{{customerId}}" },
+              { "key": "Idempotency-Key", "value": "confirm-hold-001" }
+            ],
+            "url": "{{baseUrl}}/api/v1/holds/{{holdId}}/confirm",
+            "description": "ACTIVE → CONFIRMED. 409 if expired/cancelled/not active."
+          }
+        },
+        {
+          "name": "Cancel hold",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.request.headers.upsert({",
+                  "  key: 'Idempotency-Key',",
+                  "  value: 'cancel-' + Date.now()",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Customer-Id", "value": "{{customerId}}" },
+              { "key": "Idempotency-Key", "value": "cancel-hold-001" }
+            ],
+            "url": "{{baseUrl}}/api/v1/holds/{{holdId}}/cancel",
+            "description": "ACTIVE → CANCELLED. Cannot cancel CONFIRMED."
+          }
+        },
+        {
+          "name": "Create hold (idempotent replay)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Customer-Id", "value": "{{customerId}}" },
+              { "key": "Idempotency-Key", "value": "fixed-replay-key-001" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 1\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/drops/{{dropId}}/holds",
+            "description": "Call twice with the same Idempotency-Key + same body to verify replay of the original result."
+          }
+        },
+        {
+          "name": "Create hold (idempotency conflict)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Customer-Id", "value": "{{customerId}}" },
+              { "key": "Idempotency-Key", "value": "fixed-replay-key-001" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 2\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/drops/{{dropId}}/holds",
+            "description": "Same Idempotency-Key as replay request but different quantity → expect 409."
+          }
+        }
+      ]
+    }
+  ]
+}
