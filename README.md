@@ -8,6 +8,7 @@ Spring Boot service for scarce inventory drops: create a temporary hold, then co
 | **Design** | Full TDD: [`DESIGN.md`](DESIGN.md) |
 | **API (detailed)** | Also mirrored in [`api-docs.md`](api-docs.md) |
 | **Postman** | [`postman/Limited-Drop-Reservation-Service.postman_collection.json`](postman/Limited-Drop-Reservation-Service.postman_collection.json) |
+| **AI usage** | How AI was steered on this project: [`AI-USAGE.md`](AI-USAGE.md) |
 
 ---
 
