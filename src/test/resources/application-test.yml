@@ -1,0 +1,48 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:drop_db;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      # Flyway V1 uses MySQL DATETIME(6)/JSON; unit/WebMvc tests do not need Flyway.
+      # Integration/DataJpa tests that need schema use create-drop under this profile.
+      # Production / docker-compose runs Flyway against MySQL.
+      ddl-auto: create-drop
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+      - org.springframework.boot.autoconfigure.amqp.RabbitAutoConfiguration
+  data:
+    redis:
+      host: localhost
+      port: 6379
+  rabbitmq:
+    host: localhost
+    port: 5672
+
+app:
+  hold:
+    duration-seconds: 300
+    max-quantity: 10
+  expiration:
+    batch-size: 100
+    fixed-delay-ms: 3600000
+  outbox:
+    batch-size: 50
+    fixed-delay-ms: 3600000
+  cache:
+    drop-ttl-seconds: 60
+
+logging:
+  level:
+    root: WARN
+    com.limiteddrop: INFO
