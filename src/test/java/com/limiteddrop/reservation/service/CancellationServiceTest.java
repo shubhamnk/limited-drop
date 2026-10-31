@@ -83,6 +83,7 @@ class CancellationServiceTest {
     void cancelActiveHold() {
         HoldEntity hold = hold("hold-1", HoldStatus.ACTIVE, Instant.now().plusSeconds(90));
         when(holdRepository.findByIdForUpdate("hold-1")).thenReturn(Optional.of(hold));
+        when(holdRepository.expireActiveHold("hold-1")).thenReturn(0);
         when(holdRepository.cancelActiveHold("hold-1")).thenReturn(1);
         when(dropRepository.releaseInventory(10L, 1)).thenReturn(1);
 

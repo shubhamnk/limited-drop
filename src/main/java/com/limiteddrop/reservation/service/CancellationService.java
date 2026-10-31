@@ -60,9 +60,13 @@ public class CancellationService {
             return idempotencyService.readStored(existing.get(), HoldResponse.class);
         }
 
-        HoldResponse response = deadlockRetryHelper.execute(
+        CancelResult result = deadlockRetryHelper.execute(
                 () -> transactionTemplate.execute(status -> doCancel(holdId, customerId))
         );
+        if (result.conflict() != null) {
+            throw result.conflict();
+        }
+        HoldResponse response = result.response();
         idempotencyService.saveSuccess(
                 customerId,
                 IdempotencyOperation.CANCEL_HOLD,
@@ -75,14 +79,14 @@ public class CancellationService {
         return response;
     }
 
-    private HoldResponse doCancel(String holdId, String customerId) {
+    private CancelResult doCancel(String holdId, String customerId) {
         HoldEntity hold = holdRepository.findByIdForUpdate(holdId)
                 .orElseThrow(() -> new NotFoundException("HOLD_NOT_FOUND", "Hold not found: " + holdId));
         HoldService.assertOwnership(hold, customerId);
 
         if (hold.getStatus() == HoldStatus.CANCELLED) {
             // Already cancelled — return current state without releasing inventory again.
-            return HoldResponse.from(hold);
+            return CancelResult.ok(HoldResponse.from(hold));
         }
         if (hold.getStatus() == HoldStatus.CONFIRMED) {
             throw new ConflictException("HOLD_CONFIRMED", "Cannot cancel a confirmed hold");
@@ -92,20 +96,21 @@ public class CancellationService {
         }
 
         Instant now = Instant.now();
-        if (!hold.getExpiresAt().isAfter(now)) {
-            int expired = holdRepository.expireActiveHold(holdId);
-            if (expired == 1) {
-                dropRepository.releaseInventory(hold.getDropId(), hold.getQuantity());
-                outboxService.appendHoldEvent(
-                        HoldEventType.HOLD_EXPIRED,
-                        hold.getId(),
-                        hold.getDropId(),
-                        hold.getCustomerId(),
-                        hold.getQuantity()
-                );
-                dropQueryService.invalidateDrop(hold.getDropId());
-            }
-            throw new ConflictException("HOLD_EXPIRED", "Hold has expired and inventory was released");
+        // Expire path must commit before 409 (same rule as confirm).
+        int expired = holdRepository.expireActiveHold(holdId);
+        if (expired == 1) {
+            dropRepository.releaseInventory(hold.getDropId(), hold.getQuantity());
+            outboxService.appendHoldEvent(
+                    HoldEventType.HOLD_EXPIRED,
+                    hold.getId(),
+                    hold.getDropId(),
+                    hold.getCustomerId(),
+                    hold.getQuantity()
+            );
+            dropQueryService.invalidateDrop(hold.getDropId());
+            return CancelResult.conflict(
+                    new ConflictException("HOLD_EXPIRED", "Hold has expired and inventory was released")
+            );
         }
 
         int updated = holdRepository.cancelActiveHold(holdId);
@@ -128,6 +133,16 @@ public class CancellationService {
 
         hold.setStatus(HoldStatus.CANCELLED);
         hold.setUpdatedAt(now);
-        return HoldResponse.from(hold);
+        return CancelResult.ok(HoldResponse.from(hold));
+    }
+
+    private record CancelResult(HoldResponse response, ConflictException conflict) {
+        static CancelResult ok(HoldResponse response) {
+            return new CancelResult(response, null);
+        }
+
+        static CancelResult conflict(ConflictException conflict) {
+            return new CancelResult(null, conflict);
+        }
     }
 }

@@ -98,6 +98,7 @@ class ConfirmationServiceTest {
     void confirmExpiredTransitionsAndConflicts() {
         HoldEntity hold = hold("hold-exp", HoldStatus.ACTIVE, Instant.now().minusSeconds(5));
         when(holdRepository.findByIdForUpdate("hold-exp")).thenReturn(Optional.of(hold));
+        when(holdRepository.confirmActiveHold("hold-exp")).thenReturn(0);
         when(holdRepository.expireActiveHold("hold-exp")).thenReturn(1);
         when(dropRepository.releaseInventory(10L, 2)).thenReturn(1);
 

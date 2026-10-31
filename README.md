@@ -2,6 +2,18 @@
 
 Spring Boot service for limited-inventory drop holds: allocate → hold → confirm/cancel/expire, with idempotency, transactional outbox → RabbitMQ, and Redis cache-aside for drop reads.
 
+See `DESIGN.md` for the technical design.
+
+## Clone locally
+
+```bash
+mkdir -p /home/shubhamkamble/personal
+cd /home/shubhamkamble/personal
+git clone https://github.com/shubhamnk/limited-drop.git limidrop
+cd limidrop
+git checkout cursor/limited-drop-service-f75a
+```
+
 ## Stack
 
 - Java 17 / Spring Boot 3.3

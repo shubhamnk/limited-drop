@@ -61,9 +61,15 @@ public class ConfirmationService {
         }
 
         try {
-            HoldResponse response = deadlockRetryHelper.execute(
+            // Commit expire+release before surfacing 409 so the conflict is durable (TDD §5.4).
+            ConfirmResult result = deadlockRetryHelper.execute(
                     () -> transactionTemplate.execute(status -> doConfirm(holdId, customerId))
             );
+            if (result.conflict() != null) {
+                metrics.recordConfirmationFailure();
+                throw result.conflict();
+            }
+            HoldResponse response = result.response();
             idempotencyService.saveSuccess(
                     customerId,
                     IdempotencyOperation.CONFIRM_HOLD,
@@ -74,19 +80,21 @@ public class ConfirmationService {
             );
             metrics.recordConfirmationSuccess();
             return response;
+        } catch (ConflictException ex) {
+            throw ex;
         } catch (RuntimeException ex) {
             metrics.recordConfirmationFailure();
             throw ex;
         }
     }
 
-    private HoldResponse doConfirm(String holdId, String customerId) {
+    private ConfirmResult doConfirm(String holdId, String customerId) {
         HoldEntity hold = holdRepository.findByIdForUpdate(holdId)
                 .orElseThrow(() -> new NotFoundException("HOLD_NOT_FOUND", "Hold not found: " + holdId));
         HoldService.assertOwnership(hold, customerId);
 
         if (hold.getStatus() == HoldStatus.CONFIRMED) {
-            return HoldResponse.from(hold);
+            return ConfirmResult.ok(HoldResponse.from(hold));
         }
         if (hold.getStatus() == HoldStatus.CANCELLED) {
             throw new ConflictException("HOLD_CANCELLED", "Cannot confirm a cancelled hold");
@@ -96,7 +104,9 @@ public class ConfirmationService {
         }
 
         Instant now = Instant.now();
-        if (!hold.getExpiresAt().isAfter(now)) {
+        // Prefer DB clock via conditional UPDATE; Java check is a fast path before that.
+        int updated = holdRepository.confirmActiveHold(holdId);
+        if (updated != 1) {
             int expired = holdRepository.expireActiveHold(holdId);
             if (expired == 1) {
                 dropRepository.releaseInventory(hold.getDropId(), hold.getQuantity());
@@ -108,12 +118,10 @@ public class ConfirmationService {
                         hold.getQuantity()
                 );
                 dropQueryService.invalidateDrop(hold.getDropId());
+                return ConfirmResult.conflict(
+                        new ConflictException("HOLD_EXPIRED", "Hold has expired and inventory was released")
+                );
             }
-            throw new ConflictException("HOLD_EXPIRED", "Hold has expired and inventory was released");
-        }
-
-        int updated = holdRepository.confirmActiveHold(holdId);
-        if (updated != 1) {
             throw new ConflictException("HOLD_NOT_ACTIVE", "Hold is no longer active");
         }
         int confirmed = dropRepository.confirmInventory(hold.getDropId(), hold.getQuantity());
@@ -132,6 +140,16 @@ public class ConfirmationService {
 
         hold.setStatus(HoldStatus.CONFIRMED);
         hold.setUpdatedAt(now);
-        return HoldResponse.from(hold);
+        return ConfirmResult.ok(HoldResponse.from(hold));
+    }
+
+    private record ConfirmResult(HoldResponse response, ConflictException conflict) {
+        static ConfirmResult ok(HoldResponse response) {
+            return new ConfirmResult(response, null);
+        }
+
+        static ConfirmResult conflict(ConflictException conflict) {
+            return new ConfirmResult(null, conflict);
+        }
     }
 }
